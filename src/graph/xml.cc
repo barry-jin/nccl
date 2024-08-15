@@ -715,7 +715,7 @@ ncclResult_t ncclTopoGetXmlFromSys(struct ncclXmlNode* pciNode, struct ncclXml* 
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvmlDev, struct ncclXml* xml, struct ncclXmlNode** gpuNodeRet) {
+ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvmlDev, ncclNvmlDeviceNVLinkRemoteBusId *remoteBusId, struct ncclXml* xml, struct ncclXmlNode** gpuNodeRet) {
   struct ncclXmlNode* gpuNode = NULL;
   NCCLCHECK(xmlGetSub(pciNode, "gpu", &gpuNode));
   if (gpuNode == NULL) NCCLCHECK(xmlAddNode(xml, pciNode, "gpu", &gpuNode));
@@ -750,7 +750,7 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   NCCLCHECK(xmlGetSub(gpuNode, "nvlink", &nvlNode));
   if (nvlNode == NULL) {
     // NVML NVLink detection
-    int maxNvLinks = (sm < 60) ? 0 : (sm < 70) ? 4 : (sm < 80) ? 6 : (sm < 90) ? 12 : 18;
+    int maxNvLinks = ncclGetMaxNVLinks(sm);
 
     if (maxNvLinks > 0 && nvmlDev == NULL) {
       WARN("No NVML device handle. Skipping nvlink detection.");
@@ -758,34 +758,11 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
     }
 
     for (int l=0; l<maxNvLinks; ++l) {
-      // Check whether we can use this NVLink for P2P
-      unsigned canP2P;
-      if ((ncclNvmlDeviceGetNvLinkCapability(nvmlDev, l, NVML_NVLINK_CAP_P2P_SUPPORTED, &canP2P) != ncclSuccess) || !canP2P) continue;
-
-      // Make sure the Nvlink is up. The previous call should have trained the link.
-      nvmlEnableState_t isActive = NVML_FEATURE_DISABLED;
-#if CUDART_VERSION >= 11080
-      if (sm >= 90) {
-        nvmlFieldValue_t fv;
-        fv.fieldId = NVML_FI_DEV_NVLINK_GET_STATE;
-        fv.scopeId = l;
-        // fv.value will contain NV_FEATURE_ENABLED or NV_FEATURE_DISABLED
-        if ((ncclNvmlDeviceGetFieldValues(nvmlDev, 1, &fv) == ncclSuccess) && (fv.nvmlReturn == NVML_SUCCESS))
-          isActive = (nvmlEnableState_t) fv.value.uiVal;
-      } else /* FALLTHRU to GetNvLinkState if before SM90 */
-#endif
-      {
-        (void) ncclNvmlDeviceGetNvLinkState(nvmlDev, l, &isActive);
-      }
-      if (isActive != NVML_FEATURE_ENABLED) continue;
-
-      // Try to figure out what's on the other side of the NVLink
-      nvmlPciInfo_t remoteProc;
-      if (ncclNvmlDeviceGetNvLinkRemotePciInfo(nvmlDev, l, &remoteProc) != ncclSuccess) continue;
+      const char *p = (*remoteBusId)[l];
+      if (p[0] == '\0') continue;
 
       // Make a lower case copy of the bus ID for calling ncclDeviceType
       // PCI system path is in lower case
-      char* p = remoteProc.busId;
       char lowerId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
       for (int c=0; c<NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE; c++) {
         lowerId[c] = tolower(p[c]);
@@ -865,14 +842,14 @@ ncclResult_t ncclTopoGetXmlFromGpu(struct ncclXmlNode* pciNode, nvmlDevice_t nvm
   return ncclSuccess;
 }
 
-ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, struct ncclXmlNode** gpuNode) {
+ncclResult_t ncclTopoFillGpu(struct ncclXml* xml, const char* busId, ncclNvmlDeviceNVLinkRemoteBusId* remoteBusId, struct ncclXmlNode** gpuNode) {
   struct ncclXmlNode* node;
   NCCLCHECK(ncclTopoGetPciNode(xml, busId, &node));
   NCCLCHECK(xmlSetAttrIfUnset(node, "class", "0x03"));
   NCCLCHECK(ncclTopoGetXmlFromSys(node, xml));
   nvmlDevice_t nvmlDev;
   NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
-  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, xml, gpuNode));
+  NCCLCHECK(ncclTopoGetXmlFromGpu(node, nvmlDev, remoteBusId, xml, gpuNode));
   return ncclSuccess;
 }
 

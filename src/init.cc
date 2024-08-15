@@ -24,6 +24,7 @@
 #include <dlfcn.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include "param.h"
 
@@ -35,6 +36,19 @@
 #else
 #define NCCL_GROUP_CUDA_STREAM 1 // CGMD: CUDA 9.0,9.1 Need to use an internal CUDA stream
 #endif
+
+double dbtime()
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec  + tv.tv_usec * 1e-6;
+}
+
+void printEvent(ncclComm_t comm, const char* title, double bgntime, double endtime)
+{
+  fprintf(stderr, "NcclInit %8d: %-40s comm: %p rank: %4d nranks: %4d called: %f completed: %f elapsed: %f\n",
+	  getpid(), title, comm, comm->rank, comm->nRanks, bgntime, endtime, endtime - bgntime);
+}
 
 const char* ncclFuncStr[NCCL_NUM_FUNCTIONS] = { "Broadcast", "Reduce", "AllGather", "ReduceScatter", "AllReduce" };
 const char* ncclAlgoStr[NCCL_NUM_ALGORITHMS] = { "Tree", "Ring", "CollNetDirect", "CollNetChain", "NVLS", "NVLSTree" };
@@ -346,6 +360,7 @@ static ncclResult_t commAlloc(struct ncclComm* comm, struct ncclComm* parent, in
   NCCLCHECK(int64ToBusId(comm->busId, busId));
   NCCLCHECK(ncclNvmlDeviceGetHandleByPciBusId(busId, &nvmlDev));
   NCCLCHECK(ncclNvmlDeviceGetIndex(nvmlDev, (unsigned int*)&comm->nvmlDev));
+  memcpy(&comm->nvmlDevNVLinkRemoteBusId, &ncclNvmlGetDeviceNVLinkRemoteBusId(nvmlDev), sizeof(comm->nvmlDevNVLinkRemoteBusId));
 
   comm->compCap = ncclCudaCompCap();
   TRACE(NCCL_INIT,"comm %p rank %d nranks %d cudaDev %d busId %lx compCap %d", comm, rank, ndev, comm->cudaDev, comm->busId, comm->compCap);
@@ -518,6 +533,7 @@ static ncclResult_t fillInfo(struct ncclComm* comm, struct ncclPeerInfo* info, u
   NCCLCHECK(ncclGpuGdrSupport(comm, &info->gdrSupport));
   info->comm = comm;
   info->cudaCompCap = comm->minCompCap = comm->maxCompCap = comm->compCap;
+  memcpy(&info->nvmlDevNVLinkRemoteBusId, comm->nvmlDevNVLinkRemoteBusId, sizeof(info->nvmlDevNVLinkRemoteBusId));
 
   // MNNVL support
   {
@@ -723,12 +739,16 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   int* pxnPeers = NULL;
   int *topParentLocalRanks = NULL;
   int tpProxyRank;
+  double bgntime, endtime;
 
   timers[TIMER_INIT_ALLGATHER] = clockNano();
   // AllGather1 - begin
   NCCLCHECKGOTO(ncclCalloc(&comm->peerInfo, nranks+1), ret, fail); // Extra rank to represent CollNet root
   NCCLCHECKGOTO(fillInfo(comm, comm->peerInfo+rank, comm->commHash), ret, fail);
+  bgntime = dbtime();
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, comm->peerInfo, sizeof(struct ncclPeerInfo)), ret, fail);
+  endtime = dbtime();
+  printEvent(comm, " AllGather1st", bgntime, endtime);
 
   comm->cuMemSupport = 1;
   for (int i = 0; i < nranks; i++) {
@@ -850,7 +870,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   ringGraph->pattern = NCCL_TOPO_PATTERN_RING;
   ringGraph->minChannels = 1;
   ringGraph->maxChannels = MAXCHANNELS/2;
+  bgntime = dbtime();
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, ringGraph), ret, fail);
+  endtime = dbtime();
+  printEvent(comm, "    topoCompRing", bgntime, endtime);
+
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, ringGraph), ret, fail);
 
   memset(treeGraph, 0, sizeof(struct ncclTopoGraph));
@@ -858,7 +882,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   treeGraph->pattern = NCCL_TOPO_PATTERN_BALANCED_TREE;
   treeGraph->minChannels = ringGraph->nChannels;
   treeGraph->maxChannels = ringGraph->nChannels;
+  bgntime = dbtime();
   NCCLCHECKGOTO(ncclTopoCompute(comm->topo, treeGraph), ret, fail);
+  endtime = dbtime();
+  printEvent(comm, "    topoCompTree", bgntime, endtime);
+
   NCCLCHECKGOTO(ncclTopoPrintGraph(comm->topo, treeGraph), ret, fail);
 
   memset(collNetChainGraph, 0, sizeof(struct ncclTopoGraph));
@@ -923,7 +951,10 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
   comm->nChannels = std::min(treeGraph->nChannels, ringGraph->nChannels);
   NCCLCHECKGOTO(ncclTopoPreset(comm, graphs, &allGather3Data[rank].topoRanks), ret, fail);
 
+  bgntime = dbtime();
   NCCLCHECKGOTO(bootstrapAllGather(comm->bootstrap, allGather3Data, sizeof(*allGather3Data)), ret, fail);
+  endtime = dbtime();
+  printEvent(comm, "    AllGather2nd", bgntime, endtime);
 
   // Determine nNodes, firstRanks, ...
   NCCLCHECKGOTO(ncclCalloc(&nodesFirstRank, nranks), ret, fail);
@@ -1362,7 +1393,10 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   int* parentRanks = NULL;
   int cudaArch;
   uint64_t timers[TIMERS_INIT_COUNT];
+  double overallBgntime, overallEndtime;
+  double kernelInitBgntime, kernelInitEndtime;
 
+  overallBgntime = dbtime();
   timers[TIMER_INIT_TOTAL] = clockNano();
   CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);
   CUDACHECKGOTO(cudaDeviceGetAttribute(&archMajor, cudaDevAttrComputeCapabilityMajor, cudaDev), res, fail);
@@ -1370,7 +1404,11 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
   cudaArch = 100*archMajor + 10*archMinor;
 
   timers[TIMER_INIT_KERNELS] = clockNano();
+  kernelInitBgntime = dbtime();
   NCCLCHECK(ncclInitKernelsForDevice(cudaArch, &maxLocalSizeBytes));
+  kernelInitEndtime = dbtime();
+  printEvent(comm, "    kernelInitForDevice", kernelInitBgntime, kernelInitEndtime);
+
   // Set the maximum kernel stack size of all kernels to avoid
   // a CUDA memory reconfig on load (c.f. NVSHMEM issue)
   if (maxLocalSizeBytes > 0 && ncclParamSetStackSize() == 1) {
@@ -1390,7 +1428,12 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
     NCCLCHECKGOTO(bootstrapSplit((struct ncclBootstrapHandle*)&job->commId, comm, job->parent, job->color, job->key, parentRanks), res, fail);
   } else {
     NCCLCHECKGOTO(commAlloc(comm, NULL, job->nranks, job->myrank), res, fail);
+    double initbgntime, initendtime;
+
+    initbgntime = dbtime();
     NCCLCHECKGOTO(bootstrapInit((struct ncclBootstrapHandle*)&job->commId, comm), res, fail);
+    initendtime = dbtime();
+    printEvent(comm, "    bootstrapInit", initbgntime, initendtime);
   }
   timers[TIMER_INIT_BOOTSTRAP] = clockNano() - timers[TIMER_INIT_BOOTSTRAP];
 
@@ -1427,12 +1470,13 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
                 comm, comm->nRanks, (unsigned long long)hashUniqueId(job->commId), comm->rank, comm->cudaDev);
   }
 
+  overallEndtime = dbtime();
   if (job->parent) {
-    INFO(NCCL_INIT,"ncclCommSplit comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx parent %p color %d key %d commId 0x%llx - Init COMPLETE",
-    comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, job->parent, job->color, job->key, (unsigned long long)hashUniqueId(job->commId));
+    INFO(NCCL_INIT,"ncclCommSplit comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx parent %p color %d key %d commId 0x%llx - Init Began at %f Completed at %f Elpased %f s",
+    comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, job->parent, job->color, job->key, (unsigned long long)hashUniqueId(job->commId), overallBgntime, overallEndtime, overallEndtime - overallBgntime);
   } else {
-    INFO(NCCL_INIT,"ncclCommInitRank comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx commId 0x%llx - Init COMPLETE",
-    comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, (unsigned long long)hashUniqueId(job->commId));
+    INFO(NCCL_INIT,"ncclCommInitRank comm %p rank %d nranks %d cudaDev %d nvmlDev %d busId %lx commId 0x%llx - Init Began at %f Completed at %f Elpased %f s",
+    comm, comm->rank, comm->nRanks, comm->cudaDev, comm->nvmlDev, comm->busId, (unsigned long long)hashUniqueId(job->commId), overallBgntime, overallEndtime, overallEndtime - overallBgntime);
   }
   INFO(NCCL_INIT|NCCL_PROFILE,"Init timings: rank %d nranks %d total %.2f (kernels %.2f, bootstrap %.2f, allgathers %.2f, topo %.2f, graphs %.2f, connections %.2f, rest %.2f)", comm->rank, comm->nRanks, timers[TIMER_INIT_TOTAL]/1e9,
     timers[TIMER_INIT_KERNELS]/1e9, timers[TIMER_INIT_BOOTSTRAP]/1e9, timers[TIMER_INIT_ALLGATHER]/1e9, timers[TIMER_INIT_TOPO]/1e9, timers[TIMER_INIT_GRAPHS]/1e9, timers[TIMER_INIT_CONNECT]/1e9,
@@ -1443,6 +1487,9 @@ exit:
     __atomic_store_n(job->newcomm, comm, __ATOMIC_RELEASE);
   }
   free(parentRanks);
+
+  overallEndtime = dbtime();
+  printEvent(comm, "commInitRank", overallBgntime, overallEndtime);
   return res;
 fail:
   comm->initState = res;
@@ -1777,6 +1824,7 @@ ncclResult_t ncclCommSetAsyncError(ncclComm_t comm, ncclResult_t nextState) {
 
 NCCL_API(ncclResult_t, ncclCommInitRankConfig, ncclComm_t* comm, int nranks, ncclUniqueId commId, int myrank, ncclConfig_t *config);
 ncclResult_t ncclCommInitRankConfig(ncclComm_t *newcomm, int nranks, ncclUniqueId commId, int myrank, ncclConfig_t *config) {
+  fprintf(stderr, "%d: Enter ncclCommInitRankConfig\tcomm: NULL rank: %d nranks: %d called: %f\n", getpid(), myrank, nranks, dbtime());
   NVTX3_FUNC_RANGE_IN(nccl_domain);
   int cudaDev;
   ncclResult_t ret = ncclSuccess;

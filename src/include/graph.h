@@ -9,6 +9,7 @@
 
 #include "nccl.h"
 #include "device.h"
+#include "nvmlwrap.h"
 #include <limits.h>
 #include <stdlib.h>
 #include <ctype.h>

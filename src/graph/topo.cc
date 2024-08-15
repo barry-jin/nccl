@@ -719,6 +719,10 @@ ncclResult_t ncclTopoRefreshBcmP2pLinks(void) {
   return ncclSuccess;
 }
 
+double dbtime();
+
+void printEvent(ncclComm_t comm, const char* title, double bgntime, double endtime);
+
 ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** system) {
   struct ncclXml* xml;
   NCCLCHECK(xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES));
@@ -739,16 +743,19 @@ ncclResult_t ncclTopoGetSystem(struct ncclComm* comm, struct ncclTopoSystem** sy
 
   NCCLCHECK(ncclTopoRefreshBcmP2pLinks());
 
+  double bgntime = dbtime();
   // Detect only the GPU managed by this process.  We'll get any others through XML fusion.
   char busId[NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE];
   NCCLCHECK(int64ToBusId(comm->peerInfo[comm->rank].busId, busId));
   struct ncclXmlNode* node;
-  NCCLCHECK(ncclTopoFillGpu(xml, busId, &node));
+  NCCLCHECK(ncclTopoFillGpu(xml, busId, &comm->peerInfo[comm->rank].nvmlDevNVLinkRemoteBusId, &node));
   if (node) {
     NCCLCHECK(xmlSetAttrInt(node, "keep", 1));
     NCCLCHECK(xmlSetAttrInt(node, "rank", comm->rank));
     NCCLCHECK(xmlInitAttrInt(node, "gdr", comm->peerInfo[comm->rank].gdrSupport));
   }
+  double endtime = dbtime();
+  printEvent(comm, " topoFillGpu", bgntime, endtime);
   // Auto-detect NICs if needed. net/collnet share the same xml/graph nodes,
   // so we start with collnet so that it has precedence.
   int netDevCount = 0;

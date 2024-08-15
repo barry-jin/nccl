@@ -45,6 +45,7 @@ struct ncclPeerInfo {
   int64_t busId;
   struct ncclComm* comm;
   int cudaCompCap;
+  ncclNvmlDeviceNVLinkRemoteBusId nvmlDevNVLinkRemoteBusId;
   // MNNVL support
   nvmlGpuFabricInfoV_t fabricInfo;
   int cuMemSupport;
