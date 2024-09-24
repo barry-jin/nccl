@@ -457,6 +457,8 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
 
   if (ret == 0) {
     sock->state = ncclSocketStateConnected;
+    char line[SOCKET_NAME_MAXLEN+1];
+    WARN("socketStartConnect: Successfully connected to %s", ncclSocketToString(&sock->addr, line));
     return ncclSuccess;
   } else if (errno == EINPROGRESS) {
     sock->state = ncclSocketStateConnectPolling;
@@ -476,6 +478,17 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
       WARN("socketStartConnect: exceeded timeouts (%d)", sock->timedOutRetries);
       return ncclRemoteError;
     }
+    usleep(SLEEP_INT);
+    return ncclSuccess;
+  } else if (errno == ECONNABORTED) {
+    // Connection was aborted, handle retries
+    if (++sock->abortedRetries == RETRY_ABORTED_TIMES) {
+      sock->state = ncclSocketStateError;
+      WARN("socketStartConnect: exceeded retries (%d) for ECONNABORTED", sock->abortedRetries);
+      return ncclRemoteError;
+    }
+    WARN("socketStartConnect: Connection aborted (attempt %d/%f), retrying in %d microseconds", 
+         sock->abortedRetries, RETRY_ABORTED_TIMES, SLEEP_INT);
     usleep(SLEEP_INT);
     return ncclSuccess;
   } else {
@@ -698,6 +711,7 @@ ncclResult_t ncclSocketInit(struct ncclSocket* sock, union ncclSocketAddress* ad
   if (sock == NULL) goto exit;
   sock->timedOutRetries = 0;
   sock->refusedRetries = 0;
+  sock->abortedRetries = 0;
   sock->abortFlag = abortFlag;
   sock->asyncFlag = asyncFlag;
   sock->state = ncclSocketStateInitialized;

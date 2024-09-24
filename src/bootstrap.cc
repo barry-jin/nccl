@@ -218,6 +218,42 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
   return ncclSuccess;
 }
 
+ncclResult_t bootstrapCreateRootX(struct ncclBootstrapHandle* handle) {
+  struct ncclSocket* listenSock;
+  struct bootstrapRootArgs* args;
+  pthread_t thread;
+
+  NCCLCHECK(ncclCalloc(&listenSock, 1));
+  NCCLCHECK(ncclSocketInit(listenSock, &handle->addr, handle->magic, ncclSocketTypeBootstrap, NULL, 0));
+  NCCLCHECK(ncclSocketListen(listenSock));
+
+  NCCLCHECK(ncclCalloc(&args, 1));
+  args->listenSock = listenSock;
+  args->magic = handle->magic;
+  char line[SOCKET_NAME_MAXLEN+1];
+  WARN("Creating Root with socket address: %s", ncclSocketToString(&handle->addr, line));
+  NEQCHECK(pthread_create(&thread, NULL, bootstrapRoot, (void*)args), 0);
+  ncclSetThreadName(thread, "NCCL BootstrapR");
+  NEQCHECK(pthread_detach(thread), 0); // will not be pthread_join()'d
+  return ncclSuccess;
+}
+
+ncclResult_t bootstrapGetUniqueIdX(struct ncclBootstrapHandle* handle, char* socketAddr, uint64_t magic, bool isRoot) {
+  memset(handle, 0, sizeof(ncclBootstrapHandle));
+  WARN("socketAddr is %s", socketAddr);
+  if (ncclSocketGetAddrFromString(&handle->addr, socketAddr) != ncclSuccess) {
+    WARN("Invalid socketAddr, please use format: <ipv4>:<port> or [<ipv6>]:<port> or <hostname>:<port>");
+    return ncclInvalidArgument;
+  }
+  handle->magic = magic;
+
+  if (isRoot) {
+    NCCLCHECK(bootstrapCreateRootX(handle));
+  }
+
+  return ncclSuccess;
+}
+
 struct unexConn {
   int peer;
   int tag;

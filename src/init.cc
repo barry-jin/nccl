@@ -120,6 +120,17 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
   return res;
 }
 
+NCCL_API(ncclResult_t, ncclGetUniqueIdX, ncclUniqueId* out, char* socketAddr, uint64_t magic, bool isRoot);
+ncclResult_t ncclGetUniqueIdX(ncclUniqueId* out, char* socketAddr, uint64_t magic, bool isRoot) {
+  if (isRoot) {
+    NCCLCHECK(ncclInit());
+  }
+  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
+  ncclResult_t res = bootstrapGetUniqueIdX((struct ncclBootstrapHandle*)out, socketAddr, magic, isRoot);
+  TRACE_CALL("ncclGetUniqueIdX(0x%llx)", (unsigned long long)hashUniqueId(*out));
+  return res;
+}
+
 // Prevent compiler from optimizing out these operations
 #ifdef __clang__
 #define NCCL_NO_OPTIMIZE __attribute__((optnone))

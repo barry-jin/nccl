@@ -19,6 +19,8 @@ static_assert(sizeof(struct ncclBootstrapHandle) <= sizeof(ncclUniqueId), "Boots
 ncclResult_t bootstrapNetInit();
 ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFromEnv);
 ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle);
+ncclResult_t bootstrapGetUniqueIdX(struct ncclBootstrapHandle* handle, char* socketAddr, uint64_t magic, bool isRoot);
+ncclResult_t bootstrapCreateRootX(struct ncclBootstrapHandle* handle);
 ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* comm);
 ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct ncclComm* parent, int color, int key, int* parentRanks);
 ncclResult_t bootstrapAllGather(void* commState, void* allData, int size);
