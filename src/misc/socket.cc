@@ -487,8 +487,8 @@ static ncclResult_t socketStartConnect(struct ncclSocket* sock) {
       WARN("socketStartConnect: exceeded retries (%d) for ECONNABORTED", sock->abortedRetries);
       return ncclRemoteError;
     }
-    WARN("socketStartConnect: Connection aborted (attempt %d/%f), retrying in %d microseconds", 
-         sock->abortedRetries, RETRY_ABORTED_TIMES, SLEEP_INT);
+    // WARN("socketStartConnect: Connection aborted (attempt %d/%f), retrying in %d microseconds", 
+    //      sock->abortedRetries, RETRY_ABORTED_TIMES, SLEEP_INT);
     usleep(SLEEP_INT);
     return ncclSuccess;
   } else {

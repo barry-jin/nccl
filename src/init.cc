@@ -125,9 +125,12 @@ ncclResult_t ncclGetUniqueIdX(ncclUniqueId* out, char* socketAddr, uint64_t magi
   if (isRoot) {
     NCCLCHECK(ncclInit());
   }
-  NCCLCHECK(PtrCheck(out, "GetUniqueId", "out"));
-  ncclResult_t res = bootstrapGetUniqueIdX((struct ncclBootstrapHandle*)out, socketAddr, magic, isRoot);
-  TRACE_CALL("ncclGetUniqueIdX(0x%llx)", (unsigned long long)hashUniqueId(*out));
+  NCCLCHECK(PtrCheck(out, "GetUniqueIdX", "out"));
+  ncclBootstrapHandle handle;
+  ncclResult_t res = bootstrapGetUniqueIdX(&handle, socketAddr, magic, isRoot);
+  // Use generateUniqueIdFromBootstrap to make ncclUniqueId deterministic
+  // if ncclBootstrapHandle's content are the same across processes. 
+  generateUniqueIdFromBootstrap(handle, out);
   return res;
 }
 

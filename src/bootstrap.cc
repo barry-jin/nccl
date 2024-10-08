@@ -218,6 +218,19 @@ ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle) {
   return ncclSuccess;
 }
 
+ncclResult_t generateUniqueIdFromBootstrap(const ncclBootstrapHandle& handle, ncclUniqueId* out) {
+  const char* rawBytes = reinterpret_cast<const char*>(&handle);
+  size_t handleSize = sizeof(ncclBootstrapHandle);
+
+  std::memcpy(out->internal, rawBytes, handleSize);
+
+  // Fill or extend the rest of the 128 bytes
+  for (size_t i = handleSize; i < NCCL_UNIQUE_ID_BYTES; i++) {
+      out->internal[i] = out->internal[i - handleSize] ^ (i & 0xFF);
+  }
+  return ncclSuccess;
+}
+
 ncclResult_t bootstrapCreateRootX(struct ncclBootstrapHandle* handle) {
   struct ncclSocket* listenSock;
   struct bootstrapRootArgs* args;

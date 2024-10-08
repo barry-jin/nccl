@@ -21,6 +21,7 @@ ncclResult_t bootstrapCreateRoot(struct ncclBootstrapHandle* handle, bool idFrom
 ncclResult_t bootstrapGetUniqueId(struct ncclBootstrapHandle* handle);
 ncclResult_t bootstrapGetUniqueIdX(struct ncclBootstrapHandle* handle, char* socketAddr, uint64_t magic, bool isRoot);
 ncclResult_t bootstrapCreateRootX(struct ncclBootstrapHandle* handle);
+ncclResult_t generateUniqueIdFromBootstrap(const ncclBootstrapHandle& handle, ncclUniqueId* out);
 ncclResult_t bootstrapInit(struct ncclBootstrapHandle* handle, struct ncclComm* comm);
 ncclResult_t bootstrapSplit(struct ncclBootstrapHandle* handle, struct ncclComm* comm, struct ncclComm* parent, int color, int key, int* parentRanks);
 ncclResult_t bootstrapAllGather(void* commState, void* allData, int size);
